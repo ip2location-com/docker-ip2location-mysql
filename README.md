@@ -9,9 +9,9 @@ This is a pre-configured, ready-to-run MySQL server with IP2Location Geolocation
 
 1. Run this image as daemon using the download token and product code from [IP2Location LITE](https://lite.ip2location.com) or [IP2Location](https://www.ip2location.com).
 
-   ```bash
-   docker run --name ip2location -d -e TOKEN={DOWNLOAD_TOKEN} -e CODE={DOWNLOAD_CODE} -e MYSQL_PASSWORD={MYSQL_PASSWORD} ip2location/mysql
-   ```
+    ```bash
+    docker run --name ip2location -d -e TOKEN={DOWNLOAD_TOKEN} -e CODE={DOWNLOAD_CODE} -e MYSQL_PASSWORD={MYSQL_PASSWORD} ip2location/mysql
+    ```
 
    **<u>ENV VARIABLE</u>**
 
