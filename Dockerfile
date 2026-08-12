@@ -15,12 +15,6 @@ RUN chmod 755 /app/*.sh
 
 WORKDIR /app
 
-# Exposed ENV
-ENV TOKEN=FALSE
-ENV CODE=FALSE
-ENV IP_TYPE=FALSE
-ENV MYSQL_PASSWORD=FALSE
-
 # Add VOLUMEs
 VOLUME  ["/etc/mysql", "/var/lib/mysql"]
 
