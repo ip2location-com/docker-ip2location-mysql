@@ -1,0 +1,10 @@
+# These images run on Linux: force LF so a checkout on Windows cannot
+# introduce CRs that break shell shebangs and SQL heredocs.
+* text=auto eol=lf
+
+# Explicit, so the intent survives edits to the rule above.
+*.sh      text eol=lf
+Dockerfile text eol=lf
+*.cnf     text eol=lf
+*.md      text eol=lf
+*.sql     text eol=lf

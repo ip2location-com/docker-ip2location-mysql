@@ -1,102 +1,136 @@
 #!/bin/bash
 
-text_primary() { echo -n " $1 $(printf '\055%.0s' {1..80})" | head -c 80; echo -n ' '; }
-text_success() { printf "\e[00;92m%s\e[00m\n" "$1"; }
-text_danger() { printf "\e[00;91m%s\e[00m\n" "$1"; exit 0; }
+if [ -n "$NO_COLOR" ]; then
+	C_RESET=; C_DIM=; C_BOLD=; C_OK=; C_WARN=; C_ERR=
+else
+	C_RESET=$'\e[0m'; C_DIM=$'\e[2m'; C_BOLD=$'\e[1m'
+	C_OK=$'\e[32m'; C_WARN=$'\e[33m'; C_ERR=$'\e[31m'
+fi
 
-[ ! -f /ip2location.conf ] && text_danger "Missing configuration file."
+STEP_N=0
+STEP_WIDTH=58
+
+banner() {
+	printf '\n%s  %s%s\n%s  %s%s\n\n' \
+		"$C_BOLD" "$1" "$C_RESET" \
+		"$C_DIM" "$(printf '─%.0s' $(seq 1 $((${#1} + 2))))" "$C_RESET"
+}
+
+step() {
+	STEP_N=$((STEP_N + 1))
+	printf '  %s%2d.%s ' "$C_DIM" "$STEP_N" "$C_RESET"
+	if [ $((${#1} + 1)) -le "$STEP_WIDTH" ]; then
+		printf '%s ' "$1"
+		printf '%s%s%s ' "$C_DIM" "$(printf '·%.0s' $(seq 1 $((STEP_WIDTH - ${#1}))))" "$C_RESET"
+	else
+		printf '%s\n     ' "$1"
+	fi
+	printf '%s' "$C_DIM"
+}
+ok()   { if [ -n "$1" ]; then printf '%s✓%s %s(%s)%s\n' "$C_OK" "$C_RESET" "$C_DIM" "$1" "$C_RESET"; else printf '%s✓%s\n' "$C_OK" "$C_RESET"; fi; }
+warn() { printf '%s!%s %s%s%s\n' "$C_WARN" "$C_RESET" "$C_DIM" "$1" "$C_RESET"; }
+fail() { printf '%s✗%s %s\n' "$C_ERR" "$C_RESET" "$1"; exit 1; }
+note()  { printf '     %s%s%s\n' "$C_DIM" "$1" "$C_RESET"; }
+field() { printf '  %s%-9s%s %s\n' "$C_DIM" "$1" "$C_RESET" "$2"; }
+
+group() {
+	local n="$1" out=""
+	while [ ${#n} -gt 3 ]; do
+		out=",${n: -3}${out}"
+		n="${n:0:${#n}-3}"
+	done
+	printf '%s%s' "$n" "$out"
+}
+
+summary() {
+	printf '\n  %s✓%s %s%s%s\n' "$C_OK" "$C_RESET" "$C_BOLD$C_OK" "$1" "$C_RESET"
+	[ -n "$2" ] && printf '    %s%s%s\n' "$C_DIM" "$2" "$C_RESET"
+	printf '\n'
+}
+
+[ ! -f /ip2location.conf ] && fail "Missing configuration file."
+
+banner "IP2Location / IP2Proxy Update"
 
 USER_AGENT="Mozilla/5.0+(compatible; IP2Location/MySQL-Docker; https://hub.docker.com/r/ip2location/mysql)"
-TOKEN=$(grep 'TOKEN' /ip2location.conf | cut -d= -f2)
-CODE=$(grep 'CODE' /ip2location.conf | cut -d= -f2)
-IP_TYPE=$(grep 'IP_TYPE' /ip2location.conf | cut -d= -f2)
-MYSQL_PASSWORD=$(grep 'MYSQL_PASSWORD' /ip2location.conf | cut -d= -f2)
+TOKEN=$(grep '^TOKEN=' /ip2location.conf | cut -d= -f2-)
+CODE=$(grep '^CODE=' /ip2location.conf | cut -d= -f2-)
+CODE_INPUT="$CODE"
+IP_TYPE=$(grep '^IP_TYPE=' /ip2location.conf | cut -d= -f2-)
+MYSQL_PASSWORD=$(grep '^MYSQL_PASSWORD=' /ip2location.conf | cut -d= -f2-)
+
+CODE=$(echo $CODE | sed 's/-//')
+
+if [ "$IP_TYPE" == "IPV6" ]; then
+	IP_TYPE="IPV6"
+	SUFFIX="CSVIPV6"
+else
+	[ -n "$IP_TYPE" ] && [ "$IP_TYPE" != "IPV4" ] && echo " > IP_TYPE '$IP_TYPE' is not recognised, using IPV4."
+	IP_TYPE="IPV4"
+	SUFFIX="CSV"
+fi
 
 rm -rf /_tmp && mkdir /_tmp && cd /_tmp
 
-text_primary " > Download IP2Location database"
+step "Download IP2Location $IP_TYPE database"
 
-if [ "$IP_TYPE" == "IPV4" ]; then
-	wget -qO ipv4.zip --user-agent="$USER_AGENT" "https://www.ip2location.com/download?token=${TOKEN}&code=${CODE}CSV" > /dev/null 2>&1
+ARCHIVE="database.zip"
+wget -qO "$ARCHIVE" --user-agent="$USER_AGENT" "https://www.ip2location.com/download?token=${TOKEN}&code=${CODE}${SUFFIX}" > /dev/null 2>&1
 
-	[ ! -z "$(grep 'NO PERMISSION' database.zip)" ] && text_danger "[DENIED]"
-	[ ! -z "$(grep '5 TIMES' database.zip)" ] && text_danger "[QUOTA EXCEEDED]"
+[ ! -z "$(grep 'NO PERMISSION' "$ARCHIVE")" ] && fail "DENIED"
+[ ! -z "$(grep '5 TIMES' "$ARCHIVE")" ] && fail "QUOTA EXCEEDED"
 
-	RESULT=$(unzip -t ipv4.zip >/dev/null 2>&1)
+unzip -t "$ARCHIVE" >/dev/null 2>&1
 
-	[ $? -ne 0 ] && text_danger "[FILE CORRUPTED]"
-elif [ "$IP_TYPE" == "IPV6" ]; then
-	wget -qO ipv6.zip --user-agent="$USER_AGENT" "https://www.ip2location.com/download?token=${TOKEN}&code=${CODE}CSVIPV6" > /dev/null 2>&1
+[ $? -ne 0 ] && fail "FILE CORRUPTED"
 
-	[ ! -z "$(grep 'NO PERMISSION' database.zip)" ] && text_danger "[DENIED]"
-	[ ! -z "$(grep '5 TIMES' database.zip)" ] && text_danger "[QUOTA EXCEEDED]"
+ok
 
-	RESULT=$(unzip -t ipv6.zip >/dev/null 2>&1)
+CSV=$(unzip -l "$ARCHIVE" | sort -nr | grep -Eio 'IP(V6)?.*CSV' | head -n 1)
 
-	[ $? -ne 0 ] && text_danger "[FILE CORRUPTED]"
-else
-	wget -qO ipv4.zip --user-agent="$USER_AGENT" "https://www.ip2location.com/download?token=${TOKEN}&code=${CODE}CSV" > /dev/null 2>&1
-	wget -qO ipv6.zip --user-agent="$USER_AGENT" "https://www.ip2location.com/download?token=${TOKEN}&code=${CODE}CSVIPV6" > /dev/null 2>&1
+step "Decompress $CSV from $ARCHIVE"
 
-	[ ! -z "$(grep 'NO PERMISSION' ipv4.zip)" ] && text_danger "[DENIED]"
-	[ ! -z "$(grep '5 TIMES' ipv4.zip)" ] && text_danger "[QUOTA EXCEEDED]"
+unzip -oq "$ARCHIVE" "$CSV"
 
-	[ ! -z "$(grep 'NO PERMISSION' ipv6.zip)" ] && text_danger "[DENIED]"
-	[ ! -z "$(grep '5 TIMES' ipv6.zip)" ] && text_danger "[QUOTA EXCEEDED]"
-
-	RESULT=$(unzip -t ipv4.zip >/dev/null 2>&1)
-	[ $? -ne 0 ] && text_danger "[FILE CORRUPTED]"
-
-	RESULT=$(unzip -t ipv6.zip >/dev/null 2>&1)
-	[ $? -ne 0 ] && text_danger "[FILE CORRUPTED]"
+if [ ! -f "$CSV" ]; then
+	fail "ERROR"
 fi
 
-text_success "[OK]"
+ok
 
-for ZIP in $(ls | grep '.zip'); do
-	CSV=$(unzip -l $ZIP | sort -nr | grep -Eio 'IP(V6)?.*CSV' | head -n 1)
+step "Create table \"ip2location_database_tmp\""
 
-	text_primary " > Decompress $CSV from $ZIP"
+RESPONSE="$(mariadb ip2location_database -e 'DROP TABLE IF EXISTS ip2location_database_tmp; CREATE TABLE ip2location_database_tmp LIKE ip2location_database' 2>&1)"
 
-	unzip -oq $ZIP $CSV
+[ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
 
-	if [ ! -f $CSV ]; then
-		text_danger "[ERROR]"
-	fi
-
-	text_success "[OK]"
+for CSV in $(ls -S *.CSV 2>/dev/null | head -n 1); do
+	step "Load $CSV into database"
+	RESPONSE="$(mariadb ip2location_database -e 'LOAD DATA LOCAL INFILE '\'''$CSV''\'' INTO TABLE ip2location_database_tmp FIELDS TERMINATED BY '\'','\'' ENCLOSED BY '\''\"'\'' LINES TERMINATED BY '\''\r\n'\''' 2>&1)"
+	[ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
 done
 
-text_primary " > [MySQL] Create table \"ip2location_database_tmp\""
+step "Retire the previous table"
 
-RESPONSE="$(mysql ip2location_database -e 'DROP TABLE IF EXISTS ip2location_database_tmp; CREATE TABLE ip2location_database_tmp LIKE ip2location_database' 2>&1)"
+RESPONSE="$(mariadb ip2location_database -e 'RENAME TABLE ip2location_database TO ip2location_database_drop' 2>&1)"
 
-[ ! -z "$(echo $RESPONSE)" ] && text_danger "[ERROR]" || text_success "[OK]"
+[ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
 
-for CSV in $(ls | grep -i '.CSV'); do
-	text_primary " > [MySQL] Load $CSV into database"
-	RESPONSE="$(mysql ip2location_database -e 'LOAD DATA LOCAL INFILE '\'''$CSV''\'' INTO TABLE ip2location_database_tmp FIELDS TERMINATED BY '\'','\'' ENCLOSED BY '\''\"'\'' LINES TERMINATED BY '\''\r\n'\''' 2>&1)"
-	[ ! -z "$(echo $RESPONSE)" ] && text_danger "[ERROR]" || text_success "[OK]"
-done
+step "Activate ip2location_database"
 
-text_primary " > [MySQL] Rename table \"ip2location_database\" to \"ip2location_database_drop\""
+RESPONSE="$(mariadb ip2location_database -e 'RENAME TABLE ip2location_database_tmp TO ip2location_database' 2>&1)"
 
-RESPONSE="$(mysql ip2location_database -e 'RENAME TABLE ip2location_database TO ip2location_database_drop' 2>&1)"
+[ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
 
-[ ! -z "$(echo $RESPONSE)" ] && text_danger "[ERROR]" || text_success "[OK]"
+step "Drop table \"ip2location_database_drop\""
 
-text_primary " > [MySQL] Rename table \"ip2location_database_tmp\" to \"ip2location_database\""
+RESPONSE="$(mariadb ip2location_database -e 'DROP TABLE IF EXISTS ip2location_database_drop' 2>&1)"
 
-RESPONSE="$(mysql ip2location_database -e 'RENAME TABLE ip2location_database_tmp TO ip2location_database' 2>&1)"
-
-[ ! -z "$(echo $RESPONSE)" ] && text_danger "[ERROR]" || text_success "[OK]"
-
-text_primary " > [MySQL] Drop table \"ip2location_database_drop\""
-
-RESPONSE="$(mysql ip2location_database -e 'DROP TABLE IF EXISTS ip2location_database_drop' 2>&1)"
-
-[ ! -z "$(echo $RESPONSE)" ] && text_danger "[ERROR]" || text_success "[OK]"
+[ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
 
 rm -rf /_tmp
 
-text_success "  > [UPDATE COMPLETED]"
+summary "Update completed" "$CODE_INPUT ($IP_TYPE) refreshed"
+field "Database" "ip2location_database"
+note "The previous data was dropped only after the new table finished loading."
+printf '\n'
