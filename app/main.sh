@@ -142,7 +142,16 @@ CSV=$(unzip -l "$ARCHIVE" | sort -nr | grep -Eio 'IP(V6)?.*CSV' | head -n 1)
 
 step "Decompress $CSV from $ARCHIVE"
 
-unzip -oq "$ARCHIVE" "$CSV"
+FIRST="$(unzip -p "$ARCHIVE" "$CSV" 2>/dev/null | head -n 1)"
+
+# The table keeps no ip_from column, so the CSV's leading field has to be
+# dropped. Neither LOAD DATA nor COPY can skip a column, and handing a loader
+# one field too many shifts every column one position to the left -- silently
+# in MariaDB, and as a hard failure in PostgreSQL. Strip it here instead,
+# streaming straight out of the archive so no second copy is written.
+[ -z "$(echo "$FIRST" | grep -E '^"?[0-9]+"?,')" ] && fail "Unexpected CSV layout: $FIRST"
+
+unzip -p "$ARCHIVE" "$CSV" | sed -E 's/^"?[0-9]+"?,//' > "$CSV"
 
 if [ ! -f "$CSV" ]; then
 	fail "ERROR"
@@ -275,11 +284,15 @@ RESPONSE="$(mariadb ip2location_database -e 'CREATE TABLE ip2location_database_t
 
 [ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
 
-for CSV in $(ls -S *.CSV 2>/dev/null | head -n 1); do
-	step "Load $CSV into database"
-	RESPONSE="$(mariadb ip2location_database -e 'LOAD DATA LOCAL INFILE '\'''$CSV''\'' INTO TABLE ip2location_database_tmp FIELDS TERMINATED BY '\'','\'' ENCLOSED BY '\''\"'\'' LINES TERMINATED BY '\''\r\n'\''' 2>&1)"
-	[ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
-done
+step "Load $CSV into database"
+RESPONSE="$(mariadb ip2location_database -e 'LOAD DATA LOCAL INFILE '\'''$CSV''\'' INTO TABLE ip2location_database_tmp FIELDS TERMINATED BY '\'','\'' ENCLOSED BY '\''\"'\'' LINES TERMINATED BY '\''\r\n'\''' 2>&1)"
+[ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
+
+# MariaDB reports success even when nothing was loaded, so prove the table has
+# rows before it is promoted over the live one.
+ROWS="$(mariadb ip2location_database -N -e 'SELECT COUNT(*) FROM ip2location_database_tmp' 2>/dev/null)"
+
+[ -n "$ROWS" ] && [ "$ROWS" -gt 0 ] 2>/dev/null || fail "No rows were loaded from $CSV."
 
 step "Drop table \"ip2location_database\""
 
@@ -310,8 +323,8 @@ BEGIN
 	IF INET6_ATON(ip) IS NULL THEN RETURN NULL; END IF;
 	IF IS_IPV6(ip) THEN
 		RETURN CAST(CONV(HEX(SUBSTR(INET6_ATON(ip),1,8)),16,10) AS DECIMAL(39,0))
-		     * CAST(18446744073709551616 AS DECIMAL(39,0))
-		     + CAST(CONV(HEX(SUBSTR(INET6_ATON(ip),9,8)),16,10) AS DECIMAL(39,0));
+		* CAST(18446744073709551616 AS DECIMAL(39,0))
+		+ CAST(CONV(HEX(SUBSTR(INET6_ATON(ip),9,8)),16,10) AS DECIMAL(39,0));
 	END IF;
 	RETURN CONV(HEX(INET6_ATON(ip)),16,10);
 END$$

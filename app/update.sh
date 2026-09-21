@@ -50,7 +50,7 @@ summary() {
 
 [ ! -f /ip2location.conf ] && fail "Missing configuration file."
 
-banner "IP2Location / IP2Proxy Update"
+banner "IP2Location Database Update"
 
 USER_AGENT="Mozilla/5.0+(compatible; IP2Location/MySQL-Docker; https://hub.docker.com/r/ip2location/mysql)"
 TOKEN=$(grep '^TOKEN=' /ip2location.conf | cut -d= -f2-)
@@ -90,7 +90,11 @@ CSV=$(unzip -l "$ARCHIVE" | sort -nr | grep -Eio 'IP(V6)?.*CSV' | head -n 1)
 
 step "Decompress $CSV from $ARCHIVE"
 
-unzip -oq "$ARCHIVE" "$CSV"
+FIRST="$(unzip -p "$ARCHIVE" "$CSV" 2>/dev/null | head -n 1)"
+
+[ -z "$(echo "$FIRST" | grep -E '^"?[0-9]+"?,')" ] && fail "Unexpected CSV layout: $FIRST"
+
+unzip -p "$ARCHIVE" "$CSV" | sed -E 's/^"?[0-9]+"?,//' > "$CSV"
 
 if [ ! -f "$CSV" ]; then
 	fail "ERROR"
@@ -104,11 +108,13 @@ RESPONSE="$(mariadb ip2location_database -e 'DROP TABLE IF EXISTS ip2location_da
 
 [ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
 
-for CSV in $(ls -S *.CSV 2>/dev/null | head -n 1); do
-	step "Load $CSV into database"
-	RESPONSE="$(mariadb ip2location_database -e 'LOAD DATA LOCAL INFILE '\'''$CSV''\'' INTO TABLE ip2location_database_tmp FIELDS TERMINATED BY '\'','\'' ENCLOSED BY '\''\"'\'' LINES TERMINATED BY '\''\r\n'\''' 2>&1)"
-	[ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
-done
+step "Load $CSV into database"
+RESPONSE="$(mariadb ip2location_database -e 'LOAD DATA LOCAL INFILE '\'''$CSV''\'' INTO TABLE ip2location_database_tmp FIELDS TERMINATED BY '\'','\'' ENCLOSED BY '\''\"'\'' LINES TERMINATED BY '\''\r\n'\''' 2>&1)"
+[ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
+
+ROWS="$(mariadb ip2location_database -N -e 'SELECT COUNT(*) FROM ip2location_database_tmp' 2>/dev/null)"
+
+[ -n "$ROWS" ] && [ "$ROWS" -gt 0 ] 2>/dev/null || fail "No rows were loaded from $CSV."
 
 step "Retire the previous table"
 
