@@ -19,12 +19,14 @@ banner() {
 step() {
 	STEP_N=$((STEP_N + 1))
 	printf '  %s%2d.%s ' "$C_DIM" "$STEP_N" "$C_RESET"
-	if [ $((${#1} + 1)) -le "$STEP_WIDTH" ]; then
-		printf '%s ' "$1"
-		printf '%s%s%s ' "$C_DIM" "$(printf '·%.0s' $(seq 1 $((STEP_WIDTH - ${#1}))))" "$C_RESET"
-	else
-		printf '%s\n     ' "$1"
-	fi
+	local label="$1"
+
+	[ ${#label} -gt "$STEP_WIDTH" ] && label="${label:0:$((STEP_WIDTH - 3))}..."
+
+	local pad=$((STEP_WIDTH - ${#label})) dots=""
+	[ $pad -gt 0 ] && dots="$(printf '·%.0s' $(seq 1 $pad))"
+
+	printf '%s %s%s%s ' "$label" "$C_DIM" "$dots" "$C_RESET"
 	printf '%s' "$C_DIM"
 }
 ok()   { if [ -n "$1" ]; then printf '%s✓%s %s(%s)%s\n' "$C_OK" "$C_RESET" "$C_DIM" "$1" "$C_RESET"; else printf '%s✓%s\n' "$C_OK" "$C_RESET"; fi; }
@@ -140,15 +142,10 @@ ok
 
 CSV=$(unzip -l "$ARCHIVE" | sort -nr | grep -Eio 'IP(V6)?.*CSV' | head -n 1)
 
-step "Decompress $CSV from $ARCHIVE"
+step "Decompress the downloaded archive"
 
 FIRST="$(unzip -p "$ARCHIVE" "$CSV" 2>/dev/null | head -n 1)"
 
-# The table keeps no ip_from column, so the CSV's leading field has to be
-# dropped. Neither LOAD DATA nor COPY can skip a column, and handing a loader
-# one field too many shifts every column one position to the left -- silently
-# in MariaDB, and as a hard failure in PostgreSQL. Strip it here instead,
-# streaming straight out of the archive so no second copy is written.
 [ -z "$(echo "$FIRST" | grep -E '^"?[0-9]+"?,')" ] && fail "Unexpected CSV layout: $FIRST"
 
 unzip -p "$ARCHIVE" "$CSV" | sed -E 's/^"?[0-9]+"?,//' > "$CSV"
@@ -284,12 +281,10 @@ RESPONSE="$(mariadb ip2location_database -e 'CREATE TABLE ip2location_database_t
 
 [ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
 
-step "Load $CSV into database"
+step "Load the CSV into the database"
 RESPONSE="$(mariadb ip2location_database -e 'LOAD DATA LOCAL INFILE '\'''$CSV''\'' INTO TABLE ip2location_database_tmp FIELDS TERMINATED BY '\'','\'' ENCLOSED BY '\''\"'\'' LINES TERMINATED BY '\''\r\n'\''' 2>&1)"
 [ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
 
-# MariaDB reports success even when nothing was loaded, so prove the table has
-# rows before it is promoted over the live one.
 ROWS="$(mariadb ip2location_database -N -e 'SELECT COUNT(*) FROM ip2location_database_tmp' 2>/dev/null)"
 
 [ -n "$ROWS" ] && [ "$ROWS" -gt 0 ] 2>/dev/null || fail "No rows were loaded from $CSV."

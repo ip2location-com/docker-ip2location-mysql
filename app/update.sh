@@ -19,12 +19,14 @@ banner() {
 step() {
 	STEP_N=$((STEP_N + 1))
 	printf '  %s%2d.%s ' "$C_DIM" "$STEP_N" "$C_RESET"
-	if [ $((${#1} + 1)) -le "$STEP_WIDTH" ]; then
-		printf '%s ' "$1"
-		printf '%s%s%s ' "$C_DIM" "$(printf '·%.0s' $(seq 1 $((STEP_WIDTH - ${#1}))))" "$C_RESET"
-	else
-		printf '%s\n     ' "$1"
-	fi
+	local label="$1"
+
+	[ ${#label} -gt "$STEP_WIDTH" ] && label="${label:0:$((STEP_WIDTH - 3))}..."
+
+	local pad=$((STEP_WIDTH - ${#label})) dots=""
+	[ $pad -gt 0 ] && dots="$(printf '·%.0s' $(seq 1 $pad))"
+
+	printf '%s %s%s%s ' "$label" "$C_DIM" "$dots" "$C_RESET"
 	printf '%s' "$C_DIM"
 }
 ok()   { if [ -n "$1" ]; then printf '%s✓%s %s(%s)%s\n' "$C_OK" "$C_RESET" "$C_DIM" "$1" "$C_RESET"; else printf '%s✓%s\n' "$C_OK" "$C_RESET"; fi; }
@@ -88,7 +90,7 @@ ok
 
 CSV=$(unzip -l "$ARCHIVE" | sort -nr | grep -Eio 'IP(V6)?.*CSV' | head -n 1)
 
-step "Decompress $CSV from $ARCHIVE"
+step "Decompress the downloaded archive"
 
 FIRST="$(unzip -p "$ARCHIVE" "$CSV" 2>/dev/null | head -n 1)"
 
@@ -108,7 +110,7 @@ RESPONSE="$(mariadb ip2location_database -e 'DROP TABLE IF EXISTS ip2location_da
 
 [ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
 
-step "Load $CSV into database"
+step "Load the CSV into the database"
 RESPONSE="$(mariadb ip2location_database -e 'LOAD DATA LOCAL INFILE '\'''$CSV''\'' INTO TABLE ip2location_database_tmp FIELDS TERMINATED BY '\'','\'' ENCLOSED BY '\''\"'\'' LINES TERMINATED BY '\''\r\n'\''' 2>&1)"
 [ ! -z "$(echo $RESPONSE)" ] && fail "$RESPONSE" || ok
 
